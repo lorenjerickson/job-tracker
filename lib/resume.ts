@@ -1,4 +1,5 @@
 import "server-only";
+import { load as cheerioLoad } from "cheerio";
 import JSZip from "jszip";
 import mammoth from "mammoth";
 import { extractText, getDocumentProxy } from "unpdf";
@@ -7,6 +8,7 @@ import { htmlToText } from "./jobfetch";
 import type { ParsedResume } from "./types";
 
 export const MIME = {
+  html: "text/html",
   pdf: "application/pdf",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 } as const;
@@ -67,7 +69,7 @@ export async function extractDocxText(buf: Buffer): Promise<string> {
   return tidy(extra ? `${extra}\n\n${body}` : body);
 }
 
-export type ResumeFileKind = keyof typeof MIME;
+export type ResumeFileKind = "pdf" | "docx";
 
 /** Identify an uploaded resume by its bytes (not just its name). */
 export function detectResumeKind(buf: Buffer, filename: string): ResumeFileKind | "doc" | null {
@@ -141,4 +143,34 @@ export function resumeForPrompt(r: ParsedResume): string {
   if (r.certifications.length) lines.push(`CERTIFICATIONS: ${r.certifications.join("; ")}`);
   for (const o of r.other) lines.push(`${o.heading.toUpperCase()}:\n  ${o.items.join("\n  ")}`);
   return lines.join("\n");
+}
+
+/** Allow only the formatting the resume editor produces; drop scripts, styles (except alignment), and handlers. */
+export function sanitizeResumeHtml(html: string): string {
+  const $ = cheerioLoad(`<div id="__root">${html}</div>`);
+  const ALLOWED = new Set(["h1", "h2", "h3", "p", "strong", "b", "em", "i", "u", "s", "a", "ul", "ol", "li", "br", "hr", "span"]);
+  // Script/style elements aren't plain "tag" nodes in the DOM tree, so remove them explicitly first.
+  $("script, style, iframe, object, embed, noscript, template, link, meta").remove();
+  // Unwrap anything outside the allow-list (keeping its text), repeating until none remain.
+  for (let guard = 0; guard < 5000; guard++) {
+    const bad = $("#__root *")
+      .filter((_, el) => !ALLOWED.has((el as { tagName: string }).tagName.toLowerCase()))
+      .first();
+    if (!bad.length) break;
+    bad.replaceWith(bad.contents());
+  }
+  // Strip every attribute except safe links and text alignment.
+  $("#__root *").each((_, el) => {
+    if (el.type !== "tag") return;
+    const node = $(el);
+    for (const name of Object.keys(el.attribs ?? {})) {
+      const v = el.attribs[name];
+      const keep =
+        (name === "href" && el.tagName === "a" && /^(https?:|mailto:|tel:)/i.test(v.trim())) ||
+        (name === "style" && /^\s*text-align:\s*(left|center|right|justify);?\s*$/i.test(v));
+      if (!keep) node.removeAttr(name);
+    }
+    if (el.tagName === "a") node.attr("rel", "noopener noreferrer");
+  });
+  return $("#__root").html() ?? "";
 }

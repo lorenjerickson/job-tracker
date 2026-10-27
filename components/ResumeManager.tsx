@@ -2,7 +2,7 @@
 import { useRef, useState } from "react";
 import type { ApplicationSummary, ParsedResume, ResumeVersion } from "@/lib/types";
 import ReassessPanel from "./ReassessPanel";
-import ResumePaper, { asTailored } from "./ResumePaper";
+import RichResumeEditor from "./RichResumeEditor";
 import { ErrorBox, Spinner, api, relDate } from "./ui";
 
 export default function ResumeManager({ initial, apps }: { initial: ResumeVersion[]; apps: ApplicationSummary[] }) {
@@ -12,7 +12,8 @@ export default function ResumeManager({ initial, apps }: { initial: ResumeVersio
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [over, setOver] = useState(false);
-  const [view, setView] = useState<"preview" | "json" | "raw">("preview");
+  const [view, setView] = useState<"edit" | "json" | "raw">("edit");
+  const [dirty, setDirty] = useState(false);
   const [jsonDraft, setJsonDraft] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -47,9 +48,27 @@ export default function ResumeManager({ initial, apps }: { initial: ResumeVersio
       fd.append("file", file);
       const { id } = await api<{ id: number }>("/api/resume", { method: "POST", body: fd });
       await refresh(id);
-      setView("preview");
+      setView("edit");
       setJustUploaded(true);
     });
+  }
+
+  /** Save the editor's content as a new version, processed exactly like an upload. */
+  function saveEdited(html: string) {
+    void run("Saving as a new version and re-reading it… (about 30–60 seconds)", async () => {
+      const { id } = await api<{ id: number }>("/api/resume/edited", { method: "POST", json: { html, baseId: selected?.id } });
+      setDirty(false);
+      await refresh(id);
+      setJustUploaded(true);
+    });
+  }
+
+  const confirmDiscard = () => !dirty || window.confirm("You have unsaved edits in the resume editor. Discard them?");
+
+  function selectVersion(id: number) {
+    if (id === selectedId || !confirmDiscard()) return;
+    setDirty(false);
+    setSelectedId(id);
   }
 
   function openJson() {
@@ -107,29 +126,38 @@ export default function ResumeManager({ initial, apps }: { initial: ResumeVersio
                   {selected.is_active && <span className="badge good">Active</span>}
                   <div className="grow" />
                   <div className="tabs" style={{ margin: 0, border: "none" }}>
-                    <button className={`tab ${view === "preview" ? "active" : ""}`} onClick={() => setView("preview")}>
-                      Parsed
+                    <button className={`tab ${view === "edit" ? "active" : ""}`} onClick={() => setView("edit")}>
+                      Edit resume
                     </button>
                     <button className={`tab ${view === "json" ? "active" : ""}`} onClick={openJson}>
-                      Fix data
+                      Structured data
                     </button>
                     <button className={`tab ${view === "raw" ? "active" : ""}`} onClick={() => setView("raw")}>
                       Extracted text
                     </button>
                   </div>
                 </div>
-                {view === "preview" &&
-                  (selected.parsed ? (
+                {/* Kept mounted while other tabs are open so unsaved edits aren't lost. */}
+                <div style={{ display: view === "edit" ? "block" : "none" }}>
+                  {selected.html ? (
                     <>
                       <p className="muted small">
-                        This is what the app understood from your file. Everything generated for job applications draws
-                        only from this. If something was misread, use <b>Fix data</b>.
+                        Edit your resume like a document. <b>Save as new version</b> treats it exactly like a fresh upload:
+                        it&apos;s re-read, becomes v{Math.max(...versions.map((v) => v.version)) + 1}, and is made active.
+                        Earlier versions are kept.
                       </p>
-                      <ResumePaper src={selected.parsed} t={asTailored(selected.parsed)} />
+                      <RichResumeEditor
+                        html={selected.html}
+                        versionLabel={`v${selected.version}`}
+                        saving={!!busy}
+                        onSave={saveEdited}
+                        onDirtyChange={setDirty}
+                      />
                     </>
                   ) : (
                     <div className="alert warn">This version hasn&apos;t been parsed yet. Click “Re-parse”.</div>
-                  ))}
+                  )}
+                </div>
                 {view === "json" && (
                   <div className="stack">
                     <p className="muted small" style={{ margin: 0 }}>
@@ -150,13 +178,13 @@ export default function ResumeManager({ initial, apps }: { initial: ResumeVersio
                             }
                             await api(`/api/resume/${selected.id}`, { method: "PATCH", json: { parsed } });
                             await refresh(selected.id);
-                            setView("preview");
+                            setView("edit");
                           })
                         }
                       >
                         Save corrections
                       </button>
-                      <button className="btn ghost" onClick={() => setView("preview")}>
+                      <button className="btn ghost" onClick={() => setView("edit")}>
                         Cancel
                       </button>
                     </div>
@@ -179,7 +207,7 @@ export default function ResumeManager({ initial, apps }: { initial: ResumeVersio
                   key={v.id}
                   className="edit-role"
                   style={{ cursor: "pointer", borderColor: v.id === selectedId ? "var(--accent)" : undefined }}
-                  onClick={() => setSelectedId(v.id)}
+                  onClick={() => selectVersion(v.id)}
                 >
                   <div className="row" style={{ justifyContent: "space-between" }}>
                     <b>v{v.version}</b>
@@ -201,9 +229,14 @@ export default function ResumeManager({ initial, apps }: { initial: ResumeVersio
                     Make v{selected.version} active
                   </button>
                 )}
-                <a className="btn" href={`/api/resume/${selected.id}/file`} target="_blank" rel="noreferrer">
-                  {selected.mime === "application/pdf" ? "View original PDF" : "Download original .docx"}
+                <a className="btn" href={`/api/resume/${selected.id}/pdf?download`}>
+                  Download v{selected.version} as PDF
                 </a>
+                {selected.mime !== "text/html" && (
+                  <a className="btn" href={`/api/resume/${selected.id}/file`} target="_blank" rel="noreferrer">
+                    {selected.mime === "application/pdf" ? "View original PDF" : "Download original .docx"}
+                  </a>
+                )}
                 <button
                   className="btn"
                   disabled={!!busy}

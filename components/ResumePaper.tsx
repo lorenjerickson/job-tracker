@@ -1,19 +1,6 @@
 import type { ParsedResume, TailoredResume } from "@/lib/types";
 
-/** Treat an untailored resume as a "tailored" one that keeps everything as-is. */
-export function asTailored(r: ParsedResume): TailoredResume {
-  return {
-    headline: r.headline,
-    summary: r.summary,
-    skills: r.skills,
-    experience: r.experience.map((e, i) => ({
-      source_index: i,
-      condensed: false,
-      bullets: e.bullets.map((text, j) => ({ text, source_ids: [`${i}.${j}`] })),
-    })),
-    notes: "",
-  };
-}
+export { asTailored } from "@/lib/resume-format";
 
 const dates = (s: string, e: string) => [s, e].filter(Boolean).join(" – ");
 

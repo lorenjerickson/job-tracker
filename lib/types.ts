@@ -145,6 +145,8 @@ export interface ResumeVersion {
   created_at: string;
   parsed: ParsedResume | null;
   raw_text: string;
+  /** Rich-text body for the editor. */
+  html: string;
 }
 
 export interface AppEvent {

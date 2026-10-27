@@ -29,7 +29,11 @@ For day-to-day use, `npm run build && npm start` is faster than dev mode.
 
 ## Using it
 
-1. **My Resume** → upload your resume as a PDF or Word (.docx) file. Check the parsed view; if anything was misread, fix it under **Fix data**. Upload again whenever you update it — every upload is a new version and old versions are kept.
+1. **My Resume** → upload your resume as a PDF or Word (.docx) file. It opens in a **rich-text editor**, a page-styled document with headings for your name, sections, and roles; bold, italic, underline, and strikethrough; bulleted and numbered lists with indenting; alignment; links; divider lines; and undo/redo.
+   - **Save as new version** treats your edits exactly like a re-upload: the text is re-read, saved as the next version, and made active. Earlier versions are kept. You'll be warned before switching versions or leaving the page with unsaved edits.
+   - Upload a new file at any time; every upload is also a new version.
+   - **Download vN as PDF** exports any version in the app's standard resume layout.
+   - **Structured data** shows exactly what the app understood (the source for every generated document), and you can correct it there.
    After uploading a new version, the **Re-assess applications** panel on that page re-scores your open applications against it and shows each score change.
 2. **+ New application** → paste the job link → **Fetch description** → review the text → **Assess fit & generate**.
 3. On the application page: review the fit assessment, the tailored resume, and the cover letter. Edit anything, then download the PDFs.

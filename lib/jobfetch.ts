@@ -17,6 +17,10 @@ export function htmlToText(html: string): string {
   const $ = cheerio.load(`<div id="__root">${html}</div>`);
   $("script, style, noscript, svg, iframe, form, button").remove();
   $("br").replaceWith("\n");
+  // Rich-text editors wrap list item text in <p>; flatten so each bullet stays on one line.
+  $("li > p").each((_, el) => {
+    $(el).replaceWith(`${$(el).html() ?? ""} `);
+  });
   $("li").each((_, el) => {
     $(el).prepend("\n• ").append("\n");
   });

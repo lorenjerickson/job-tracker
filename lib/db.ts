@@ -10,6 +10,7 @@ import type {
   ResumeVersion,
   Status,
 } from "./types";
+import { parsedToHtml } from "./resume-format";
 import { STATUSES, SUBMITTED_STATUSES, statusLabel } from "./types";
 
 /** Thrown when something tries to change the documents of an application that has been submitted. */
@@ -68,39 +69,65 @@ function open(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_events_app ON events(application_id);
   `);
-  // Additive migrations for databases created by earlier versions of the app.
-  const addColumn = (table: string, col: string, def: string) => {
-    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-    if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
-  };
-  addColumn("resumes", "mime", "TEXT NOT NULL DEFAULT 'application/pdf'");
-  addColumn("applications", "assessment_resume_id", "INTEGER REFERENCES resumes(id) ON DELETE SET NULL");
-  // Earlier versions assessed against the same resume used for tailoring.
-  db.exec("UPDATE applications SET assessment_resume_id = resume_id WHERE assessment_resume_id IS NULL AND assessment_json IS NOT NULL");
-  // Submission lock + frozen copies of exactly what was sent.
-  addColumn("applications", "submitted_at", "TEXT");
-  addColumn("applications", "resume_pdf", "BLOB");
-  addColumn("applications", "cover_pdf", "BLOB");
-  // Map the original board columns onto the new status pipeline. Anything that had already gone out is locked.
-  db.exec(`
-    UPDATE applications SET status = CASE status
-      WHEN 'saved' THEN 'evaluating'
-      WHEN 'applied' THEN 'submitted'
-      WHEN 'screening' THEN 'under_consideration'
-      WHEN 'closed' THEN 'rejected'
-      ELSE status END
-    WHERE status IN ('saved', 'applied', 'screening', 'closed');
-    UPDATE applications SET submitted_at = COALESCE(applied_at, updated_at)
-    WHERE submitted_at IS NULL
-      AND (status IN ('submitted', 'under_consideration', 'interviewing', 'offer', 'accepted')
-           OR (status = 'rejected' AND applied_at IS NOT NULL));
-  `);
   return db;
 }
 
-// Reuse one connection across hot reloads in dev.
+/**
+ * Schema migrations, tracked with SQLite's user_version. Each step runs once, in order.
+ * Steps are written to be safe on databases that already have some of the columns.
+ */
+const MIGRATIONS: ((db: Database.Database) => void)[] = [
+  // 1: original file type for resumes; assessment can be scored against a different resume version.
+  (db) => {
+    addColumn(db, "resumes", "mime", "TEXT NOT NULL DEFAULT 'application/pdf'");
+    addColumn(db, "applications", "assessment_resume_id", "INTEGER REFERENCES resumes(id) ON DELETE SET NULL");
+    db.exec("UPDATE applications SET assessment_resume_id = resume_id WHERE assessment_resume_id IS NULL AND assessment_json IS NOT NULL");
+  },
+  // 2: new status pipeline + submission lock with frozen PDFs. Anything that had already gone out is locked.
+  (db) => {
+    addColumn(db, "applications", "submitted_at", "TEXT");
+    addColumn(db, "applications", "resume_pdf", "BLOB");
+    addColumn(db, "applications", "cover_pdf", "BLOB");
+    db.exec(`
+      UPDATE applications SET status = CASE status
+        WHEN 'saved' THEN 'evaluating'
+        WHEN 'applied' THEN 'submitted'
+        WHEN 'screening' THEN 'under_consideration'
+        WHEN 'closed' THEN 'rejected'
+        ELSE status END
+      WHERE status IN ('saved', 'applied', 'screening', 'closed');
+      UPDATE applications SET submitted_at = COALESCE(applied_at, updated_at)
+      WHERE submitted_at IS NULL
+        AND (status IN ('submitted', 'under_consideration', 'interviewing', 'offer', 'accepted')
+             OR (status = 'rejected' AND applied_at IS NOT NULL));
+    `);
+  },
+  // 3: rich-text (HTML) body for resume versions created in the in-app editor.
+  (db) => {
+    addColumn(db, "resumes", "html", "TEXT");
+  },
+];
+
+function addColumn(db: Database.Database, table: string, col: string, def: string) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!cols.some((c) => c.name === col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+}
+
+function migrate(db: Database.Database) {
+  const current = db.pragma("user_version", { simple: true }) as number;
+  for (let v = current; v < MIGRATIONS.length; v++) {
+    db.transaction(() => {
+      MIGRATIONS[v](db);
+      db.pragma(`user_version = ${v + 1}`);
+    })();
+  }
+}
+
+// Reuse one connection across hot reloads in dev. Migrations run on every module load (not just when the
+// connection is first opened) so a dev server that stays up across code updates still gets new columns.
 const g = globalThis as unknown as { __jobTrackerDb?: Database.Database };
 export const db = g.__jobTrackerDb ?? (g.__jobTrackerDb = open());
+migrate(db);
 
 const parse = <T>(s: string | null): T | null => {
   if (!s) return null;
@@ -120,11 +147,14 @@ type ResumeRow = {
   mime: string;
   raw_text: string;
   parsed_json: string | null;
+  html: string | null;
   is_active: number;
   created_at: string;
 };
 
-const toResume = (r: ResumeRow): ResumeVersion => ({
+const toResume = (r: ResumeRow): ResumeVersion => {
+  const parsed = parse<ParsedResume>(r.parsed_json);
+  return {
   id: r.id,
   version: r.version,
   filename: r.filename,
@@ -132,10 +162,13 @@ const toResume = (r: ResumeRow): ResumeVersion => ({
   is_active: !!r.is_active,
   created_at: r.created_at,
   raw_text: r.raw_text,
-  parsed: parse<ParsedResume>(r.parsed_json),
-});
+  parsed,
+  // Editor-created versions keep their own formatting; others open in a layout built from the parsed data.
+  html: r.html ?? (parsed ? parsedToHtml(parsed) : ""),
+  };
+};
 
-const RESUME_COLS = "id, version, filename, mime, raw_text, parsed_json, is_active, created_at";
+const RESUME_COLS = "id, version, filename, mime, raw_text, parsed_json, html, is_active, created_at";
 
 export function listResumes(): ResumeVersion[] {
   return (db.prepare(`SELECT ${RESUME_COLS} FROM resumes ORDER BY version DESC`).all() as ResumeRow[]).map(toResume);
@@ -163,12 +196,12 @@ export function getResumeFile(id: number): { filename: string; mime: string; dat
 }
 
 export const insertResume = db.transaction(
-  (filename: string, mime: string, file: Buffer, rawText: string, parsed: ParsedResume | null): number => {
+  (filename: string, mime: string, file: Buffer, rawText: string, parsed: ParsedResume | null, html: string | null = null): number => {
     const { v } = db.prepare("SELECT COALESCE(MAX(version), 0) + 1 AS v FROM resumes").get() as { v: number };
     db.prepare("UPDATE resumes SET is_active = 0").run();
     const info = db
-      .prepare("INSERT INTO resumes (version, filename, mime, pdf, raw_text, parsed_json, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)")
-      .run(v, filename, mime, file, rawText, parsed ? JSON.stringify(parsed) : null);
+      .prepare("INSERT INTO resumes (version, filename, mime, pdf, raw_text, parsed_json, html, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, 1)")
+      .run(v, filename, mime, file, rawText, parsed ? JSON.stringify(parsed) : null, html);
     return Number(info.lastInsertRowid);
   },
 );

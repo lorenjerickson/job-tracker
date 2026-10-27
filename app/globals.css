@@ -177,3 +177,30 @@ textarea { resize: vertical; min-height: 80px; line-height: 1.5; }
 .locked-tag { display: inline-flex; align-items: center; color: var(--muted); }
 .status-pill { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 12px; font-weight: 650; color: var(--status); border: 1px solid color-mix(in srgb, var(--status) 45%, transparent); background: color-mix(in srgb, var(--status) 10%, transparent); }
 .pdf-frame { width: 100%; height: 80vh; min-height: 600px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+
+/* ---------- Rich-text resume editor ---------- */
+.rte { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); }
+.rte { overflow: clip; }
+.rte-bar { position: sticky; top: 56px; z-index: 5; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.4rem 0.75rem; padding: 0.4rem 0.5rem; background: var(--panel-2); border-bottom: 1px solid var(--border); }
+.rte-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.rte-actions { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; }
+.rte-btn { display: inline-grid; place-items: center; min-width: 30px; height: 30px; padding: 0 0.35rem; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: 14px; cursor: pointer; }
+.rte-btn:hover:not(:disabled) { background: var(--panel); color: var(--text); }
+.rte-btn.on { background: rgba(90, 169, 255, 0.16); color: var(--accent); border-color: rgba(90, 169, 255, 0.35); }
+.rte-btn:disabled { opacity: 0.35; cursor: default; }
+.rte-sep { width: 1px; height: 20px; background: var(--border-strong); margin: 0 4px; }
+.rte-select { width: auto; height: 30px; padding: 0 0.4rem; font-size: 13px; background: var(--bg-2); }
+.rte-page { padding: 1.5rem; background: var(--bg-2); }
+.rte-doc { max-width: 8.5in; min-height: 11in; margin: 0 auto; padding: 0.7in 0.75in; background: #fbfbfa; color: #111827; border-radius: 4px; box-shadow: var(--shadow); font-family: Helvetica, Arial, sans-serif; font-size: 13.5px; line-height: 1.45; outline: none; }
+.rte-doc:focus-visible { box-shadow: 0 0 0 3px rgba(90, 169, 255, 0.35), var(--shadow); }
+.rte-doc h1 { font-size: 26px; margin: 0 0 4px; color: #111827; }
+.rte-doc h2 { font-size: 13px; letter-spacing: 1.3px; text-transform: uppercase; color: #1f4e79; border-bottom: 1px solid #c7cdd6; padding-bottom: 3px; margin: 18px 0 8px; }
+.rte-doc h3 { font-size: 14px; margin: 12px 0 2px; color: #111827; }
+.rte-doc p { margin: 0 0 4px; }
+.rte-doc ul, .rte-doc ol { margin: 2px 0 8px; padding-left: 20px; }
+.rte-doc li { margin: 2px 0; }
+.rte-doc li p { margin: 0; }
+.rte-doc a { color: #1f4e79; text-decoration: underline; }
+.rte-doc hr { border: none; border-top: 1px solid #c7cdd6; margin: 12px 0; }
+.rte-doc ::selection { background: rgba(47, 125, 225, 0.25); }
+@media (max-width: 700px) { .rte-page { padding: 0.5rem; } .rte-doc { padding: 0.4in 0.35in; min-height: 0; } }
