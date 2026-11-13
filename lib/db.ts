@@ -11,6 +11,7 @@ import type {
   ResumeVersion,
   Status,
 } from "./types";
+import { findDuplicates, type DupCandidate, type DupExisting, type DuplicateMatch } from "./duplicates";
 import { parsedToHtml } from "./resume-format";
 import { STATUSES, SUBMITTED_STATUSES, statusLabel } from "./types";
 
@@ -114,6 +115,10 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
   // 5: the Accepted column was removed; its cards move to Offer.
   (db) => {
     db.exec("UPDATE applications SET status = 'offer', updated_at = datetime('now') WHERE status = 'accepted'");
+  },
+  // 6: pairs of applications confirmed as different jobs, so duplicate warnings stop for them.
+  (db) => {
+    addColumn(db, "applications", "not_duplicates_json", "TEXT");
   },
 ];
 
@@ -250,6 +255,7 @@ type AppRow = {
   cover_letter_json: string | null;
   warnings_json: string | null;
   clarifications_json: string | null;
+  not_duplicates_json: string | null;
   resume_id: number | null;
   assessment_resume_id: number | null;
   notes: string;
@@ -288,6 +294,7 @@ const toApp = (r: AppRow): Application => ({
   cover_letter: parse(r.cover_letter_json),
   warnings: parse(r.warnings_json) ?? [],
   clarifications: parse(r.clarifications_json) ?? [],
+  not_duplicates: parse(r.not_duplicates_json) ?? [],
 });
 
 export function listApplications(): ApplicationSummary[] {
@@ -296,6 +303,31 @@ export function listApplications(): ApplicationSummary[] {
       "SELECT id, company, title, location, status, position, fit_score, assessment_resume_id, applied_at, submitted_at, updated_at, created_at FROM applications ORDER BY position ASC, id ASC",
     )
     .all() as ApplicationSummary[];
+}
+
+/** Everything duplicate detection compares, for every application. */
+export function listForDuplicates(): (DupExisting & { not_duplicates: number[] })[] {
+  return (
+    db
+      .prepare("SELECT id, job_url, company, title, location, jd_text, status, fit_score, created_at, not_duplicates_json FROM applications")
+      .all() as (DupExisting & { not_duplicates_json: string | null })[]
+  ).map(({ not_duplicates_json, ...r }) => ({ ...r, not_duplicates: parse<number[]>(not_duplicates_json) ?? [] }));
+}
+
+/** Duplicate matches for a new listing, or for an existing application (excluding pairs marked "not a duplicate"). */
+export function duplicatesFor(c: DupCandidate, selfId?: number): DuplicateMatch[] {
+  const all = listForDuplicates();
+  const mine = selfId != null ? (all.find((a) => a.id === selfId)?.not_duplicates ?? []) : [];
+  const ignore = [...mine, ...all.filter((a) => selfId != null && a.not_duplicates.includes(selfId)).map((a) => a.id)];
+  return findDuplicates(c, all, { excludeId: selfId, ignore });
+}
+
+/** Record that `id` and each of `others` are different jobs. */
+export function markNotDuplicates(id: number, others: number[]) {
+  const row = db.prepare("SELECT not_duplicates_json FROM applications WHERE id = ?").get(id) as { not_duplicates_json: string | null } | undefined;
+  if (!row) throw new Error("Not found");
+  const set = new Set([...(parse<number[]>(row.not_duplicates_json) ?? []), ...others.filter((n) => Number.isInteger(n) && n !== id)]);
+  db.prepare("UPDATE applications SET not_duplicates_json = ? WHERE id = ?").run(JSON.stringify([...set]), id);
 }
 
 export function getApplication(id: number): Application | null {

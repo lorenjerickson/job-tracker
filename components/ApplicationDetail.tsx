@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { DuplicateMatch } from "@/lib/duplicates";
 import {
   GENERATE_MIN_SCORE,
   STATUSES,
@@ -15,6 +16,7 @@ import {
   type TailoredResume,
 } from "@/lib/types";
 import { ClarifyBox, ClarifyPanel } from "./Clarify";
+import { DuplicateList } from "./Duplicates";
 import ResumePaper from "./ResumePaper";
 import { ErrorBox, LockIcon, ScoreRing, Spinner, api, confirmStatusChange, relDate } from "./ui";
 
@@ -31,6 +33,7 @@ export default function ApplicationDetail({
   activeVersion: initialActiveVersion,
   assessedVersion: initialAssessedVersion,
   initialError,
+  duplicates: initialDuplicates,
 }: {
   initial: Full;
   source: ParsedResume | null;
@@ -38,6 +41,7 @@ export default function ApplicationDetail({
   activeVersion: number | null;
   assessedVersion: number | null;
   initialError: string | null;
+  duplicates: DuplicateMatch[];
 }) {
   const router = useRouter();
   const [app, setApp] = useState(initial);
@@ -48,6 +52,29 @@ export default function ApplicationDetail({
   const [error, setError] = useState<string | null>(initialError);
   const [notice, setNotice] = useState<string | null>(null);
   const [activeVersion, setActiveVersion] = useState(initialActiveVersion);
+  const [duplicates, setDuplicates] = useState(initialDuplicates);
+
+  // Company and title are often filled in by the fit analysis; re-check for duplicates when they change.
+  const dupInputs = [app.company, app.title, app.job_url, app.jd_text].join("\u0000");
+  const firstDupCheck = useRef(true);
+  useEffect(() => {
+    if (firstDupCheck.current) {
+      firstDupCheck.current = false;
+      return;
+    }
+    api<{ matches: DuplicateMatch[] }>(`/api/applications/${app.id}/duplicates`)
+      .then((r) => setDuplicates(r.matches))
+      .catch(() => {});
+  }, [dupInputs, app.id]);
+
+  async function notDuplicate(other: number) {
+    try {
+      const r = await api<{ matches: DuplicateMatch[] }>(`/api/applications/${app.id}/duplicates`, { method: "POST", json: { not_duplicate: other } });
+      setDuplicates(r.matches);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   async function generate(parts: Part[], label: string) {
     setBusy(label);
@@ -177,6 +204,17 @@ export default function ApplicationDetail({
       )}
       <ErrorBox error={error} />
       {notice && <div className="alert info">{notice}</div>}
+      {duplicates.length > 0 && (
+        <div className="card stack dup-card">
+          <div>
+            <h3 style={{ margin: 0 }}>Possible duplicate{duplicates.length === 1 ? "" : "s"}</h3>
+            <p className="muted small" style={{ margin: "0.2rem 0 0" }}>
+              {duplicates.length === 1 ? "This application looks" : "These applications look"} like the same job. Delete one, or mark them as different jobs.
+            </p>
+          </div>
+          <DuplicateList matches={duplicates} onDismiss={notDuplicate} />
+        </div>
+      )}
       {locked && (
         <div className="alert info row" style={{ gap: "0.5rem" }}>
           <LockIcon />

@@ -1,6 +1,8 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import type { DuplicateMatch } from "@/lib/duplicates";
+import { DuplicateList } from "./Duplicates";
 import { ErrorBox, Spinner, api } from "./ui";
 
 type Fetched = { text: string; company: string; title: string; location: string; source: string };
@@ -17,6 +19,34 @@ export default function NewApplication({ hasResume }: { hasResume: boolean }) {
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<"save" | "analyze" | null>(null);
+  const [matches, setMatches] = useState<DuplicateMatch[]>([]);
+  const [confirmedNew, setConfirmedNew] = useState(false);
+
+  // Check for duplicates as the link, company, title, or description change.
+  useEffect(() => {
+    if (!url.trim() && !company.trim() && !title.trim() && jd.trim().length < 300) {
+      setMatches([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const r = await api<{ matches: DuplicateMatch[] }>("/api/applications/duplicates", {
+          method: "POST",
+          json: { job_url: url, company, title, jd_text: jd },
+        });
+        setMatches(r.matches);
+      } catch {
+        /* the check is advisory; saving re-checks on the server */
+      }
+    }, 600);
+    return () => clearTimeout(t);
+  }, [url, company, title, jd]);
+
+  const dups = matches.filter((m) => m.strength !== "same_company");
+  const sameCompany = matches.filter((m) => m.strength === "same_company");
+  // A newly found duplicate needs a fresh confirmation.
+  const dupKey = dups.map((d) => d.id).join(",");
+  useEffect(() => setConfirmedNew(false), [dupKey]);
 
   async function fetchJd() {
     setFetching(true);
@@ -44,10 +74,19 @@ export default function NewApplication({ hasResume }: { hasResume: boolean }) {
     setSaving(analyze ? "analyze" : "save");
     setError(null);
     try {
-      const { id } = await api<{ id: number }>("/api/applications", {
+      const res = await fetch("/api/applications", {
         method: "POST",
-        json: { job_url: url, jd_text: jd, company, title, location, guidance },
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_url: url, jd_text: jd, company, title, location, guidance, allow_duplicate: confirmedNew }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.duplicates) {
+        setMatches(data.duplicates);
+        setSaving(null);
+        return;
+      }
+      if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+      const id = data.id as number;
       if (analyze) {
         try {
           await api(`/api/applications/${id}/generate`, { method: "POST", json: { parts: ["assessment"] } });
@@ -65,6 +104,7 @@ export default function NewApplication({ hasResume }: { hasResume: boolean }) {
   }
 
   const ready = jd.trim().length >= 100;
+  const blocked = dups.length > 0 && !confirmedNew;
 
   return (
     <div className="stack">
@@ -124,6 +164,32 @@ export default function NewApplication({ hasResume }: { hasResume: boolean }) {
         </p>
       </div>
 
+      {dups.length > 0 && (
+        <div className="card stack dup-card">
+          <div>
+            <h2 style={{ margin: 0 }}>You may have added this job already</h2>
+            <p className="muted small" style={{ margin: "0.25rem 0 0" }}>
+              {dups.length === 1 ? "This application looks" : `These ${dups.length} applications look`} like the same listing.
+            </p>
+          </div>
+          <DuplicateList matches={dups} />
+          <label className="row small" style={{ gap: "0.5rem" }}>
+            <input type="checkbox" checked={confirmedNew} onChange={(e) => setConfirmedNew(e.target.checked)} />
+            It&apos;s a different job — save it anyway
+          </label>
+        </div>
+      )}
+      {sameCompany.length > 0 && (
+        <details className="card">
+          <summary className="small subtle" style={{ cursor: "pointer" }}>
+            You have {sameCompany.length} other application{sameCompany.length === 1 ? "" : "s"} at this company
+          </summary>
+          <div style={{ marginTop: "0.6rem" }}>
+            <DuplicateList matches={sameCompany} />
+          </div>
+        </details>
+      )}
+
       <ErrorBox error={error} />
       {saving === "analyze" ? (
         <div className="card">
@@ -136,13 +202,14 @@ export default function NewApplication({ hasResume }: { hasResume: boolean }) {
         </div>
       ) : (
         <div className="row">
-          <button className="btn primary" disabled={!ready || !hasResume || !!saving} onClick={() => save(true)}>
+          <button className="btn primary" disabled={!ready || !hasResume || !!saving || blocked} onClick={() => save(true)}>
             Save &amp; analyze fit
           </button>
-          <button className="btn" disabled={!ready || !!saving} onClick={() => save(false)}>
+          <button className="btn" disabled={!ready || !!saving || blocked} onClick={() => save(false)}>
             {saving === "save" ? <Spinner /> : null} Just save to board
           </button>
           {!ready && <span className="muted small">Add the job description to continue.</span>}
+          {ready && blocked && <span className="muted small">Possible duplicate: confirm it&apos;s a different job above.</span>}
         </div>
       )}
     </div>

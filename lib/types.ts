@@ -164,6 +164,8 @@ export interface Application extends ApplicationSummary {
   warnings: FactWarning[];
   /** Factual clarifications written against this job's fit assessment. */
   clarifications: Clarification[];
+  /** Applications you've confirmed are NOT duplicates of this one. */
+  not_duplicates: number[];
   /** True when a frozen copy of the submitted resume / cover letter PDF is stored. */
   has_resume_snapshot: boolean;
   has_cover_snapshot: boolean;
