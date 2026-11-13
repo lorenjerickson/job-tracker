@@ -6,6 +6,7 @@ import type {
   AppEvent,
   Application,
   ApplicationSummary,
+  Clarification,
   ParsedResume,
   ResumeVersion,
   Status,
@@ -105,6 +106,14 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
   // 3: rich-text (HTML) body for resume versions created in the in-app editor.
   (db) => {
     addColumn(db, "resumes", "html", "TEXT");
+  },
+  // 4: factual clarifications written against a fit assessment (added to the base resume on request).
+  (db) => {
+    addColumn(db, "applications", "clarifications_json", "TEXT");
+  },
+  // 5: the Accepted column was removed; its cards move to Offer.
+  (db) => {
+    db.exec("UPDATE applications SET status = 'offer', updated_at = datetime('now') WHERE status = 'accepted'");
   },
 ];
 
@@ -240,6 +249,7 @@ type AppRow = {
   tailored_json: string | null;
   cover_letter_json: string | null;
   warnings_json: string | null;
+  clarifications_json: string | null;
   resume_id: number | null;
   assessment_resume_id: number | null;
   notes: string;
@@ -277,6 +287,7 @@ const toApp = (r: AppRow): Application => ({
   tailored: parse(r.tailored_json),
   cover_letter: parse(r.cover_letter_json),
   warnings: parse(r.warnings_json) ?? [],
+  clarifications: parse(r.clarifications_json) ?? [],
 });
 
 export function listApplications(): ApplicationSummary[] {
@@ -353,6 +364,11 @@ export function updateApplication(id: number, fields: Record<string, unknown>) {
     }
   }
   if (("tailored" in fields || "cover_letter" in fields) && isLocked(id)) throw new LockedError();
+  // Clarifications change the base resume, not this application's documents, so they're allowed after submission.
+  if ("clarifications" in fields) {
+    sets.push("clarifications_json = @clarifications_json");
+    vals.clarifications_json = JSON.stringify(cleanClarifications(fields.clarifications));
+  }
   if ("tailored" in fields) {
     sets.push("tailored_json = @tailored_json");
     vals.tailored_json = JSON.stringify(fields.tailored);
@@ -364,6 +380,34 @@ export function updateApplication(id: number, fields: Record<string, unknown>) {
   if (!sets.length) return;
   sets.push("updated_at = datetime('now')");
   db.prepare(`UPDATE applications SET ${sets.join(", ")} WHERE id = @id`).run(vals);
+}
+
+const cut = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+
+/** Validate client-supplied clarifications. */
+export function cleanClarifications(v: unknown): Clarification[] {
+  if (!Array.isArray(v)) throw new Error("clarifications must be a list");
+  return v.slice(0, 100).flatMap((c): Clarification[] => {
+    if (!c || typeof c !== "object") return [];
+    const o = c as Record<string, unknown>;
+    const id = cut(o.id, 64);
+    const requirement = cut(o.requirement, 500);
+    if (!id || !requirement) return [];
+    return [
+      {
+        id,
+        requirement,
+        match: o.match === "partial" ? "partial" : "gap",
+        text: cut(o.text, 3000),
+        applied_version: Number.isInteger(o.applied_version) ? (o.applied_version as number) : null,
+        created_at: cut(o.created_at, 40) || new Date().toISOString(),
+      },
+    ];
+  });
+}
+
+export function setClarifications(id: number, list: Clarification[]) {
+  db.prepare("UPDATE applications SET clarifications_json = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(list), id);
 }
 
 export function saveGenerated(
@@ -428,7 +472,7 @@ export const moveApplication = db.transaction((id: number, status: Status, befor
       if (!current.applied_at) db.prepare("UPDATE applications SET applied_at = date('now') WHERE id = ?").run(id);
       if (!current.submitted_at) {
         db.prepare("UPDATE applications SET submitted_at = datetime('now') WHERE id = ?").run(id);
-        addEvent(id, "locked", "Submitted — tailored resume and cover letter locked");
+        addEvent(id, "locked", "Applied — tailored resume and cover letter locked");
       }
     }
   }

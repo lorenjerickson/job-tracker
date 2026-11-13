@@ -2,7 +2,19 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { STATUSES, type AppEvent, type Application, type CoverLetter, type ParsedResume, type ResumeVersion, type Status, type TailoredResume } from "@/lib/types";
+import {
+  GENERATE_MIN_SCORE,
+  STATUSES,
+  type AppEvent,
+  type Application,
+  type Clarification,
+  type CoverLetter,
+  type ParsedResume,
+  type ResumeVersion,
+  type Status,
+  type TailoredResume,
+} from "@/lib/types";
+import { ClarifyBox, ClarifyPanel } from "./Clarify";
 import ResumePaper from "./ResumePaper";
 import { ErrorBox, LockIcon, ScoreRing, Spinner, api, confirmStatusChange, relDate } from "./ui";
 
@@ -16,7 +28,7 @@ export default function ApplicationDetail({
   initial,
   source: initialSource,
   sourceVersion: initialSourceVersion,
-  activeVersion,
+  activeVersion: initialActiveVersion,
   assessedVersion: initialAssessedVersion,
   initialError,
 }: {
@@ -34,19 +46,23 @@ export default function ApplicationDetail({
   const [tab, setTab] = useState<Tab>(initial.assessment ? "fit" : "jd");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(initialError);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [activeVersion, setActiveVersion] = useState(initialActiveVersion);
 
-  async function generate(parts: Part[] | null, label: string) {
+  async function generate(parts: Part[], label: string) {
     setBusy(label);
     setError(null);
+    setNotice(null);
     try {
-      const next = await api<Full>(`/api/applications/${app.id}/generate`, { method: "POST", json: parts ? { parts } : {} });
+      const next = await api<Full>(`/api/applications/${app.id}/generate`, { method: "POST", json: { parts } });
       if (next.resume_id && next.resume_id !== app.resume_id) {
         const r = await api<ResumeVersion>(`/api/resume/${next.resume_id}`);
         setSource(r.parsed);
         setSourceVersion(r.version);
       }
       setApp(next);
-      if (!parts) setTab("fit");
+      if (parts.includes("assessment")) setTab("fit");
+      else if (parts.length > 1) setTab("resume");
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -65,6 +81,15 @@ export default function ApplicationDetail({
     }
   }
 
+  /** Save, update, or remove one clarification (stored with the application). */
+  async function saveClarification(c: Clarification, remove = false) {
+    const rest = app.clarifications.filter((x) => x.id !== c.id);
+    return patch({ clarifications: remove ? rest : [...rest, c] });
+  }
+
+  const analyze = () => generate(["assessment"], `Analyzing fit against resume v${activeVersion ?? ""}…`);
+  const generateDocs = () => generate(["resume", "cover"], "Generating tailored resume and cover letter… (1–2 min)");
+
   async function setStatus(status: Status) {
     if (!confirmStatusChange(app, status)) return;
     try {
@@ -75,8 +100,15 @@ export default function ApplicationDetail({
     }
   }
 
-  const hasGenerated = !!(app.assessment || app.tailored || app.cover_letter);
+  const hasDocs = !!(app.tailored || app.cover_letter);
   const locked = !!app.submitted_at;
+  const canGenerate = app.fit_score != null && app.fit_score >= GENERATE_MIN_SCORE;
+  const gateReason =
+    app.fit_score == null
+      ? "Analyze fit first"
+      : canGenerate
+        ? undefined
+        : `Unlocks at a fit score of ${GENERATE_MIN_SCORE}% (currently ${app.fit_score}%)`;
   const resumeWarnings = app.warnings.filter((w) => w.where !== "Cover letter");
   const coverWarnings = app.warnings.filter((w) => w.where === "Cover letter");
 
@@ -99,7 +131,7 @@ export default function ApplicationDetail({
               {STATUSES.find((s) => s.id === app.status)?.label}
             </span>
             {locked && (
-              <span className="badge" title="Submitted: the tailored resume and cover letter are locked">
+              <span className="badge" title="Applied: the tailored resume and cover letter are locked">
                 <LockIcon size={11} /> Documents locked
               </span>
             )}
@@ -116,9 +148,12 @@ export default function ApplicationDetail({
               </option>
             ))}
           </select>
+          <button className={`btn ${app.assessment ? "" : "primary"}`} disabled={!!busy} onClick={analyze}>
+            {app.assessment ? "Re-analyze fit" : "Analyze fit"}
+          </button>
           {!locked && (
-            <button className="btn primary" disabled={!!busy} onClick={() => generate(null, "Regenerating everything… (1–2 min)")}>
-              {hasGenerated ? "Regenerate all" : "Generate"}
+            <button className={`btn ${app.assessment ? "primary" : ""}`} disabled={!!busy || !canGenerate} title={gateReason} onClick={generateDocs}>
+              {hasDocs ? "Regenerate resume & cover letter" : "Generate resume & cover letter"}
             </button>
           )}
           <button
@@ -141,11 +176,12 @@ export default function ApplicationDetail({
         </div>
       )}
       <ErrorBox error={error} />
+      {notice && <div className="alert info">{notice}</div>}
       {locked && (
         <div className="alert info row" style={{ gap: "0.5rem" }}>
           <LockIcon />
           <span>
-            Submitted {relDate(app.submitted_at)}. The tailored resume and cover letter are locked to exactly what you sent and
+            Applied {relDate(app.submitted_at)}. The tailored resume and cover letter are locked to exactly what you sent and
             can&apos;t be edited or regenerated. You can still download them, re-assess fit, and update notes.
           </span>
         </div>
@@ -153,7 +189,7 @@ export default function ApplicationDetail({
       {!locked && sourceVersion != null && activeVersion != null && sourceVersion !== activeVersion && (app.tailored || app.cover_letter) && (
         <div className="alert info">
           The tailored resume and cover letter were built from resume v{sourceVersion}; your active resume is v{activeVersion}.
-          {" "}Use “Regenerate all” to rebuild them from the latest.
+          {" "}Use “Regenerate resume &amp; cover letter” to rebuild them from the latest.
         </div>
       )}
 
@@ -181,14 +217,25 @@ export default function ApplicationDetail({
           busy={!!busy}
           activeVersion={activeVersion}
           assessedVersion={app.assessment?.resume_version ?? initialAssessedVersion}
-          onRegen={() => generate(["assessment"], `Re-assessing fit against resume v${activeVersion ?? ""}…`)}
+          locked={locked}
+          canGenerate={canGenerate}
+          onRegen={analyze}
+          onGenerate={generateDocs}
+          onSaveClarification={saveClarification}
+          onApplied={(next, version, reanalyze, rebuilt) => {
+            setApp(next);
+            setActiveVersion(version);
+            const kept = rebuilt ? " Your editor formatting couldn't be matched, so v" + version + " uses the standard layout; review it on My Resume." : "";
+            if (reanalyze) void generate(["assessment"], `Saved resume v${version}. Re-analyzing fit against it…`).then(() => rebuilt && setNotice(kept.trim()));
+            else setNotice(`Saved resume v${version} with your clarifications. It's now your active resume.${kept}`);
+          }}
         />
       )}
       {tab === "resume" && (
-        <ResumeTab app={app} source={source} busy={!!busy} locked={locked} warnings={resumeWarnings} onRegen={() => generate(["resume"], "Re-tailoring resume…")} onSave={(t) => patch({ tailored: t })} />
+        <ResumeTab app={app} source={source} busy={!!busy} locked={locked} gateReason={gateReason} warnings={resumeWarnings} onRegen={() => generate(["resume"], "Re-tailoring resume…")} onSave={(t) => patch({ tailored: t })} />
       )}
       {tab === "cover" && (
-        <CoverTab app={app} source={source} busy={!!busy} locked={locked} warnings={coverWarnings} onRegen={() => generate(["cover"], "Rewriting cover letter…")} onSave={(c) => patch({ cover_letter: c })} />
+        <CoverTab app={app} source={source} busy={!!busy} locked={locked} gateReason={gateReason} warnings={coverWarnings} onRegen={() => generate(["cover"], "Rewriting cover letter…")} onSave={(c) => patch({ cover_letter: c })} />
       )}
       {tab === "jd" && <JdTab app={app} onSave={patch} />}
       {tab === "notes" && <NotesTab app={app} onSave={patch} />}
@@ -196,7 +243,21 @@ export default function ApplicationDetail({
   );
 }
 
-function Empty({ what, onGen, busy, locked }: { what: string; onGen: () => void; busy: boolean; locked?: boolean }) {
+function Empty({
+  what,
+  onGen,
+  busy,
+  locked,
+  gateReason,
+  action = "Generate",
+}: {
+  what: string;
+  onGen: () => void;
+  busy: boolean;
+  locked?: boolean;
+  gateReason?: string;
+  action?: string;
+}) {
   if (locked) {
     return (
       <div className="card" style={{ textAlign: "center", padding: "2.5rem" }}>
@@ -209,9 +270,10 @@ function Empty({ what, onGen, busy, locked }: { what: string; onGen: () => void;
   return (
     <div className="card" style={{ textAlign: "center", padding: "2.5rem" }}>
       <p className="subtle">No {what} yet.</p>
-      <button className="btn primary" onClick={onGen} disabled={busy}>
-        Generate {what}
+      <button className="btn primary" onClick={onGen} disabled={busy || !!gateReason} title={gateReason}>
+        {action} {what}
       </button>
+      {gateReason && <p className="muted small" style={{ margin: "0.75rem 0 0" }}>{gateReason}.</p>}
     </div>
   );
 }
@@ -223,23 +285,33 @@ function FitTab({
   busy,
   activeVersion,
   assessedVersion,
+  locked,
+  canGenerate,
   onRegen,
+  onGenerate,
+  onSaveClarification,
+  onApplied,
 }: {
   app: Full;
   busy: boolean;
   activeVersion: number | null;
   assessedVersion: number | null;
+  locked: boolean;
+  canGenerate: boolean;
   onRegen: () => void;
+  onGenerate: () => void;
+  onSaveClarification: (c: Clarification, remove?: boolean) => Promise<boolean>;
+  onApplied: (next: Full, version: number, reanalyze: boolean, rebuilt: boolean) => void;
 }) {
   const a = app.assessment;
-  if (!a) return <Empty what="fit assessment" onGen={onRegen} busy={busy} />;
+  if (!a) return <Empty what="fit analysis" action="Run" onGen={onRegen} busy={busy} />;
   const outdated = activeVersion != null && assessedVersion !== activeVersion;
   const delta = a.previous_score != null ? a.score - a.previous_score : null;
   const versionNote = (
     <div className={`alert ${outdated ? "warn" : "info"} row`} style={{ justifyContent: "space-between" }}>
       <span>
         {assessedVersion != null ? `Scored against resume v${assessedVersion}.` : "Scored against an earlier resume version."}
-        {outdated && ` Your active resume is v${activeVersion} — re-assess to see how it scores now.`}
+        {outdated && ` Your active resume is v${activeVersion} — re-analyze to see how it scores now.`}
         {delta != null && (
           <>
             {" "}Previous score {a.previous_score}% →{" "}
@@ -252,7 +324,7 @@ function FitTab({
       </span>
       {outdated && (
         <button className="btn sm primary" onClick={onRegen} disabled={busy}>
-          Re-assess with v{activeVersion}
+          Re-analyze with v{activeVersion}
         </button>
       )}
     </div>
@@ -260,6 +332,7 @@ function FitTab({
   const must = a.requirements.filter((r) => r.importance === "must");
   const nice = a.requirements.filter((r) => r.importance === "nice");
   const count = (m: string) => a.requirements.filter((r) => r.match === m).length;
+  const clarsFor = (req: string) => app.clarifications.filter((c) => c.requirement === req);
   return (
     <div className="two-col">
       <div className="stack">
@@ -276,6 +349,23 @@ function FitTab({
             <p className="subtle" style={{ margin: 0 }}>{a.summary}</p>
           </div>
         </div>
+        {!locked &&
+          (canGenerate ? (
+            <div className="alert good row" style={{ justifyContent: "space-between" }}>
+              <span>At {a.score}%, this job clears the {GENERATE_MIN_SCORE}% bar for a tailored resume and cover letter.</span>
+              <button className="btn sm primary" onClick={onGenerate} disabled={busy}>
+                {app.tailored || app.cover_letter ? "Regenerate resume & cover letter" : "Generate resume & cover letter"}
+              </button>
+            </div>
+          ) : (
+            <div className="alert warn">
+              Tailored resume and cover letter generation unlocks at {GENERATE_MIN_SCORE}%. If any partial matches or gaps below aren&apos;t
+              really gaps, clarify them, add them to your resume, and re-analyze.
+            </div>
+          ))}
+        {(count("partial") > 0 || count("gap") > 0 || app.clarifications.length > 0) && (
+          <ClarifyPanel app={app} busy={busy} onApplied={onApplied} />
+        )}
         {[
           ["Required qualifications", must],
           ["Preferred qualifications", nice],
@@ -300,6 +390,7 @@ function FitTab({
                         )}
                       </div>
                     )}
+                    {r.match !== "strong" && <ClarifyBox req={r} items={clarsFor(r.requirement)} onSave={onSaveClarification} />}
                   </div>
                 </div>
               ))}
@@ -332,10 +423,10 @@ function FitTab({
           </div>
         )}
         <p className="muted small">
-          Score = weighted share of requirements met (required count double, partial = half). Generated {relDate(app.generated_at)}.
+          Score = weighted share of requirements met (required count double, partial = half). Updated {relDate(app.generated_at)}.
         </p>
         <button className={`btn ${outdated ? "primary" : ""}`} onClick={onRegen} disabled={busy}>
-          Re-assess against resume v{activeVersion ?? "?"}
+          Re-analyze against resume v{activeVersion ?? "?"}
         </button>
       </aside>
     </div>
@@ -370,6 +461,7 @@ function ResumeTab({
   source,
   busy,
   locked,
+  gateReason,
   warnings,
   onRegen,
   onSave,
@@ -378,15 +470,16 @@ function ResumeTab({
   source: ParsedResume | null;
   busy: boolean;
   locked: boolean;
+  gateReason?: string;
   warnings: Full["warnings"];
   onRegen: () => void;
   onSave: (t: TailoredResume) => Promise<boolean>;
 }) {
   const [editing, setEditing] = useState<TailoredResume | null>(null);
   const t = app.tailored;
-  if (!t) return <Empty what="tailored resume" onGen={onRegen} busy={busy} locked={locked} />;
+  if (!t) return <Empty what="tailored resume" onGen={onRegen} busy={busy} locked={locked} gateReason={gateReason} />;
   if (locked) return <LockedDoc app={app} kind="resume" notes={t.notes} />;
-  if (!source) return <div className="alert warn">The resume version this was built from was deleted. Click “Regenerate all”.</div>;
+  if (!source) return <div className="alert warn">The resume version this was built from was deleted. Click “Regenerate resume &amp; cover letter”.</div>;
   const pdf = `/api/applications/${app.id}/resume.pdf`;
   const stamp = encodeURIComponent(app.updated_at);
 
@@ -405,7 +498,7 @@ function ResumeTab({
               <a className="btn primary" href={`${pdf}?download&v=${stamp}`}>Download PDF</a>
               <a className="btn" href={`${pdf}?v=${stamp}`} target="_blank" rel="noreferrer">Open PDF in new tab</a>
               <button className="btn" onClick={() => setEditing(structuredClone(t))}>Edit</button>
-              <button className="btn" onClick={onRegen} disabled={busy}>Re-tailor</button>
+              <button className="btn" onClick={onRegen} disabled={busy || !!gateReason} title={gateReason}>Re-tailor</button>
             </>
           )}
         </div>
@@ -525,6 +618,7 @@ function CoverTab({
   source,
   busy,
   locked,
+  gateReason,
   warnings,
   onRegen,
   onSave,
@@ -533,13 +627,14 @@ function CoverTab({
   source: ParsedResume | null;
   busy: boolean;
   locked: boolean;
+  gateReason?: string;
   warnings: Full["warnings"];
   onRegen: () => void;
   onSave: (c: CoverLetter) => Promise<boolean>;
 }) {
   const [draft, setDraft] = useState<{ salutation: string; body: string; signoff: string } | null>(null);
   const c = app.cover_letter;
-  if (!c) return <Empty what="cover letter" onGen={onRegen} busy={busy} locked={locked} />;
+  if (!c) return <Empty what="cover letter" onGen={onRegen} busy={busy} locked={locked} gateReason={gateReason} />;
   if (locked) {
     return (
       <LockedDoc
@@ -590,7 +685,7 @@ function CoverTab({
               <a className="btn" href={`${pdf}?v=${stamp}`} target="_blank" rel="noreferrer">Open PDF in new tab</a>
               <button className="btn" onClick={() => navigator.clipboard.writeText([c.salutation, ...c.paragraphs, c.signoff, source?.name ?? ""].join("\n\n"))}>Copy text</button>
               <button className="btn" onClick={() => setDraft({ salutation: c.salutation, body: c.paragraphs.join("\n\n"), signoff: c.signoff })}>Edit</button>
-              <button className="btn" onClick={onRegen} disabled={busy}>Rewrite</button>
+              <button className="btn" onClick={onRegen} disabled={busy || !!gateReason} title={gateReason}>Rewrite</button>
             </>
           )}
           <div className="muted small">{words} words</div>
@@ -660,7 +755,7 @@ function JdTab({ app, onSave }: { app: Full; onSave: (f: Record<string, unknown>
       <label className="field">Guidance for generation<textarea style={{ minHeight: 60 }} value={f.guidance} onChange={(e) => setF({ ...f, guidance: e.target.value })} placeholder="e.g. Emphasize accessibility work." /></label>
       <div className="row">
         <button className="btn primary" disabled={!dirty} onClick={async () => { if (await onSave(f)) { setSaved(true); setTimeout(() => setSaved(false), 2000); } }}>Save</button>
-        {saved && <span className="small" style={{ color: "var(--good)" }}>Saved. Regenerate to apply changes to the documents.</span>}
+        {saved && <span className="small" style={{ color: "var(--good)" }}>Saved. Re-analyze or regenerate to apply the changes.</span>}
       </div>
     </div>
   );

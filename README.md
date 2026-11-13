@@ -4,8 +4,9 @@ A local Next.js + SQLite app that:
 
 1. Pulls a job description from a link (or pasted text)
 2. Scores how well your resume fits it, requirement by requirement, with quoted evidence
-3. Builds a tailored resume **PDF** and a cover letter **PDF** using only facts from your resume
-4. Tracks every application on a dark-themed Kanban board
+3. Lets you clarify partial matches and gaps with real experience, adds it to your base resume, and re-scores
+4. Once a job scores 75% or more, builds a tailored resume **PDF** and a cover letter **PDF** using only facts from your resume
+5. Tracks every application on a dark-themed Kanban board
 
 ## Setup
 
@@ -35,23 +36,26 @@ For day-to-day use, `npm run build && npm start` is faster than dev mode.
    - **Download vN as PDF** exports any version in the app's standard resume layout.
    - **Structured data** shows exactly what the app understood (the source for every generated document), and you can correct it there.
    After uploading a new version, the **Re-assess applications** panel on that page re-scores your open applications against it and shows each score change.
-2. **+ New application** → paste the job link → **Fetch description** → review the text → **Assess fit & generate**.
-3. On the application page: review the fit assessment, the tailored resume, and the cover letter. Edit anything, then download the PDFs.
-   The fit assessment is always scored against your active resume. If it was scored against an older version, the Fit tab says so and offers **Re-assess with vN**. Tailored resumes and cover letters stay on the version they were built from until you click **Regenerate all**.
-4. Track progress by dragging cards across the board, or by changing the status on the application page:
-   **Evaluating → Submitted → Under Consideration → Interviewing → Offer → Accepted / Rejected**
+2. **+ New application** → paste the job link → **Fetch description** → review the text → **Save & analyze fit**.
+3. On the application page, review the fit analysis. Analysis and document generation are separate steps.
+   - **Clarify gaps.** Every *partial* or *gap* requirement has a **+ Clarify** button and a question meant to draw out experience your resume may leave out. Describe what you actually did (company, what you did, tools, results). Drafts are saved with the application.
+   - **Review & add to resume** drafts resume additions from your clarifications only: experience bullets under the right role, skills, certifications, or other items. Edit the wording, change the role, or remove items, then **Save as vN & re-analyze** (or just **Save as vN**). This creates a new base resume version and makes it active; the old version is kept. Editor formatting is preserved where the app can find the right role and section.
+   - The fit analysis is always scored against your active resume. If it was scored against an older version, the Fit tab says so and offers **Re-analyze with vN**.
+4. **Generate resume & cover letter** unlocks once the fit score is **75% or more** (enforced by the server too). Edit anything, then download the PDFs. Tailored resumes and cover letters stay on the resume version they were built from until you regenerate them.
+5. Track progress by dragging cards across the board, or by changing the status on the application page:
+   **Evaluating → Applied → Contact → Interviewing → Offer**, or **Unsuccessful** at any point
 
-### Submitted applications are locked
+### Applied applications are locked
 
-The first time an application moves to **Submitted** or any later stage, the app asks you to confirm. It then:
+The first time an application moves to **Applied** or any later stage, the app asks you to confirm. It then:
 
 - locks the tailored resume and cover letter. They can't be edited, re-tailored, rewritten, or regenerated, and this is enforced by the server as well as hidden in the UI.
 - saves a copy of the exact PDFs, so the download always matches what you sent, even if you later edit or delete resume versions.
 - sets the applied date if it's empty.
 
-The lock stays on even if you move the card back to Evaluating. You can still re-assess fit, edit notes and job details, and download or copy the documents. Moving a card straight from Evaluating to Rejected (you passed on the job) doesn't lock it.
+The lock stays on even if you move the card back to Evaluating. You can still re-assess fit, edit notes and job details, and download or copy the documents. Moving a card straight from Evaluating to Unsuccessful (you passed on the job) doesn't lock it.
 
-When you upgrade, existing cards move to the new columns: Saved → Evaluating, Applied → Submitted, Screening → Under Consideration, and Closed → Rejected. Any card that had already been applied to gets locked.
+Column history: Submitted was renamed Applied, Under Consideration became Contact, and Rejected became Unsuccessful. The Accepted column was removed, and any cards in it moved to Offer. (Earlier still: Saved → Evaluating, Applied → Submitted, Screening → Under Consideration, Closed → Rejected.) Any card that had already been applied to stays locked.
 
 ## How "no invented facts" is enforced
 
@@ -66,6 +70,8 @@ The prompt tells the model to use only resume facts, but the app doesn't rely on
 - In the fit assessment, evidence quotes that can't be found word for word on your resume are labeled.
 
 Hand edits you make in the app aren't checked.
+
+Clarifications are the one way new facts enter your resume, and they come only from what you write. Drafted additions use only your clarification's content; any number that isn't in what you wrote is flagged for review, and nothing is saved until you approve it. After that, they're ordinary resume facts, so tailored resumes and cover letters can use them.
 
 ## Notes
 

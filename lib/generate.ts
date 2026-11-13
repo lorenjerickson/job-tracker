@@ -33,6 +33,9 @@ const ASSESSMENT_SCHEMA = obj({
       importance: enm(["must", "nice"], "'must' for required/minimum qualifications, 'nice' for preferred/bonus"),
       match: enm(["strong", "partial", "gap"]),
       evidence: str("Short VERBATIM quote(s) from the resume proving the match, joined with ' … '. Empty for gaps."),
+      probe: str(
+        "For partial or gap ONLY: one specific question to the candidate that would surface real experience meeting this requirement that the resume may not mention (e.g. 'Have you run production workloads on Kubernetes? Which systems, at which company, and what was your part?'). Empty string for strong.",
+      ),
     }),
     "8-16 of the most important requirements",
   ),
@@ -49,6 +52,8 @@ export async function assess(ctx: GenContext): Promise<Assessment> {
     system: `You are a candid, experienced technical recruiter assessing how well a candidate fits a job.
 Be honest — do not inflate. A requirement is "strong" only when the resume explicitly shows it,
 "partial" when the resume shows something closely related or less depth/years than asked, "gap" otherwise.
+Judge substance, not keywords: experience described in different words, or an equivalent tool/practice, counts.
+Use "gap" only when nothing on the resume reasonably relates to the requirement.
 Years of experience may be computed from the role dates on the resume.
 Evidence must be quoted verbatim from the resume.
 ${FACT_RULES}`,

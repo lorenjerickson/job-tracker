@@ -109,7 +109,7 @@ export default function Board({ initial }: { initial: ApplicationSummary[] }) {
                     <div className="company row" style={{ justifyContent: "space-between", flexWrap: "nowrap" }}>
                       <span>{a.company || "Unknown company"}</span>
                       {a.submitted_at && (
-                        <span className="locked-tag" title="Submitted: resume and cover letter are locked">
+                        <span className="locked-tag" title="Applied: resume and cover letter are locked">
                           <LockIcon size={11} />
                         </span>
                       )}

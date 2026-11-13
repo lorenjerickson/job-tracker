@@ -1,11 +1,9 @@
 "use client";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { ErrorBox, Spinner, api } from "./ui";
 
 type Fetched = { text: string; company: string; title: string; location: string; source: string };
-
-const STEPS = ["Assessing fit", "Tailoring your resume", "Writing the cover letter", "Fact-checking every claim"];
 
 export default function NewApplication({ hasResume }: { hasResume: boolean }) {
   const router = useRouter();
@@ -18,16 +16,7 @@ export default function NewApplication({ hasResume }: { hasResume: boolean }) {
   const [fetching, setFetching] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState<"save" | "generate" | null>(null);
-  const [step, setStep] = useState(0);
-
-  // Rough progress indicator while generation runs server-side.
-  useEffect(() => {
-    if (saving !== "generate") return;
-    setStep(0);
-    const t = setInterval(() => setStep((s) => Math.min(s + 1, STEPS.length - 1)), 12_000);
-    return () => clearInterval(t);
-  }, [saving]);
+  const [saving, setSaving] = useState<"save" | "analyze" | null>(null);
 
   async function fetchJd() {
     setFetching(true);
@@ -51,17 +40,17 @@ export default function NewApplication({ hasResume }: { hasResume: boolean }) {
     }
   }
 
-  async function save(generate: boolean) {
-    setSaving(generate ? "generate" : "save");
+  async function save(analyze: boolean) {
+    setSaving(analyze ? "analyze" : "save");
     setError(null);
     try {
       const { id } = await api<{ id: number }>("/api/applications", {
         method: "POST",
         json: { job_url: url, jd_text: jd, company, title, location, guidance },
       });
-      if (generate) {
+      if (analyze) {
         try {
-          await api(`/api/applications/${id}/generate`, { method: "POST", json: {} });
+          await api(`/api/applications/${id}/generate`, { method: "POST", json: { parts: ["assessment"] } });
         } catch (e) {
           // The application exists; send the user there to retry.
           router.push(`/applications/${id}?error=${encodeURIComponent((e as Error).message)}`);
@@ -81,7 +70,7 @@ export default function NewApplication({ hasResume }: { hasResume: boolean }) {
     <div className="stack">
       {!hasResume && (
         <div className="alert warn">
-          You haven&apos;t uploaded a resume yet. You can save the job now, but generating needs your resume — <a href="/resume">upload it here</a>.
+          You haven&apos;t uploaded a resume yet. You can save the job now, but analyzing fit needs your resume — <a href="/resume">upload it here</a>.
         </div>
       )}
       <div className="card stack">
@@ -130,28 +119,25 @@ export default function NewApplication({ hasResume }: { hasResume: boolean }) {
           style={{ minHeight: 70 }}
         />
         <p className="muted small" style={{ margin: 0 }}>
-          Guidance shapes emphasis and tone only — nothing is ever added that isn&apos;t on your resume.
+          Used later, when you generate the tailored resume and cover letter. Guidance shapes emphasis and tone only — nothing is ever
+          added that isn&apos;t on your resume.
         </p>
       </div>
 
       <ErrorBox error={error} />
-      {saving === "generate" ? (
+      {saving === "analyze" ? (
         <div className="card">
           <div className="row">
-            <Spinner /> <b>Generating — this usually takes 1–2 minutes.</b>
+            <Spinner /> <b>Analyzing your fit for this job — usually under a minute.</b>
           </div>
-          <ul className="progress-steps">
-            {STEPS.map((s, i) => (
-              <li key={s} style={{ color: i < step ? "var(--good)" : i === step ? "var(--text)" : undefined }}>
-                {i < step ? "✓" : i === step ? "›" : "·"} {s}
-              </li>
-            ))}
-          </ul>
+          <p className="muted small" style={{ margin: "0.5rem 0 0" }}>
+            Next you can clarify any partial matches or gaps. The tailored resume and cover letter unlock at a 75% fit score.
+          </p>
         </div>
       ) : (
         <div className="row">
           <button className="btn primary" disabled={!ready || !hasResume || !!saving} onClick={() => save(true)}>
-            Assess fit &amp; generate resume + cover letter
+            Save &amp; analyze fit
           </button>
           <button className="btn" disabled={!ready || !!saving} onClick={() => save(false)}>
             {saving === "save" ? <Spinner /> : null} Just save to board
