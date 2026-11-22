@@ -38,7 +38,9 @@
   at most two repair attempts, local commit, no delegated model calls. One repair
   attempt used (build retry). Allowance telemetry unavailable; user approved plan.
 - Delivery: branch security/next-16.4.6 in /private/tmp/job-tracker-next-16.4.6.
-  Original checkout unchanged. PR publication awaits permission.
+  Original checkout unchanged. Draft PR opened with user permission:
+  https://github.com/lorenjerickson/job-tracker/pull/1
+  Includes pre-existing local commits 1e09360 and 64b53bd absent from remote main.
 - Next: merge branch into main, install dependencies, restart development server.
 - Exclusions: unrelated dependency updates, AI service calls, production data
   changes, deployment.
