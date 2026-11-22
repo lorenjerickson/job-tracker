@@ -59,6 +59,8 @@ export interface Assessment {
     match: MatchLevel;
     evidence: string;
     evidence_verified?: boolean;
+    /** For partial/gap matches: a question meant to draw out relevant experience the resume may not mention. */
+    probe?: string;
   }[];
   strengths: string[];
   gaps: string[];
@@ -78,14 +80,44 @@ export interface FactWarning {
   reason: string;
 }
 
+/** Tailored resume and cover letter generation is only offered at or above this fit score. */
+export const GENERATE_MIN_SCORE = 75;
+
+/**
+ * A factual clarification the candidate wrote for a "partial" or "gap" requirement in a fit assessment.
+ * Once added to the base resume, applied_version records the resume version it went into.
+ */
+export interface Clarification {
+  id: string;
+  requirement: string;
+  match: "partial" | "gap";
+  text: string;
+  applied_version: number | null;
+  created_at: string;
+}
+
+/** A proposed change to the base resume, drafted from a clarification and reviewed by the candidate. */
+export interface ResumeAddition {
+  clarification_id: string;
+  kind: "bullet" | "skill" | "certification" | "other";
+  /** kind=bullet: index into ParsedResume.experience. -1 otherwise. */
+  role_index: number;
+  /** kind=skill: skill category. kind=other: section heading. Empty otherwise. */
+  section: string;
+  text: string;
+  /** Anything the candidate should double-check (role placement guess, unverified number…). */
+  note: string;
+}
+
+// Internal ids are kept stable across label changes (Nov 2026: Submitted → Applied, Under Consideration → Contact,
+// Rejected → Unsuccessful; Accepted removed and its cards moved to Offer by migration 5).
 export const STATUSES = [
   { id: "evaluating", label: "Evaluating" },
-  { id: "submitted", label: "Submitted" },
-  { id: "under_consideration", label: "Under Consideration" },
+  { id: "submitted", label: "Applied" },
+  { id: "under_consideration", label: "Contact" },
   { id: "interviewing", label: "Interviewing" },
   { id: "offer", label: "Offer" },
-  { id: "accepted", label: "Accepted" },
-  { id: "rejected", label: "Rejected" },
+  { id: "rejected", label: "Unsuccessful" },
 ] as const;
 
 export type Status = (typeof STATUSES)[number]["id"];
@@ -93,12 +125,12 @@ export type Status = (typeof STATUSES)[number]["id"];
 /**
  * Entering any of these means the application has gone out. The tailored resume and cover letter
  * are locked at that point and stay locked, even if the card is moved back later.
- * ("rejected" is not here because you can reject a job yourself while still evaluating it.)
+ * ("rejected" — shown as Unsuccessful — is not here because you can reject a job yourself while still evaluating it.)
  */
-export const SUBMITTED_STATUSES: readonly Status[] = ["submitted", "under_consideration", "interviewing", "offer", "accepted"];
+export const SUBMITTED_STATUSES: readonly Status[] = ["submitted", "under_consideration", "interviewing", "offer"];
 
 /** Applications that are no longer in play. */
-export const FINAL_STATUSES: readonly Status[] = ["accepted", "rejected"];
+export const FINAL_STATUSES: readonly Status[] = ["rejected"];
 
 export const statusLabel = (s: string) => STATUSES.find((x) => x.id === s)?.label ?? s;
 
@@ -130,6 +162,10 @@ export interface Application extends ApplicationSummary {
   tailored: TailoredResume | null;
   cover_letter: CoverLetter | null;
   warnings: FactWarning[];
+  /** Factual clarifications written against this job's fit assessment. */
+  clarifications: Clarification[];
+  /** Applications you've confirmed are NOT duplicates of this one. */
+  not_duplicates: number[];
   /** True when a frozen copy of the submitted resume / cover letter PDF is stored. */
   has_resume_snapshot: boolean;
   has_cover_snapshot: boolean;

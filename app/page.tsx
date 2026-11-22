@@ -8,7 +8,7 @@ export default function Home() {
   const apps = listApplications();
   const resume = getActiveResume();
   return (
-    <main className="main">
+    <main className="main wide">
       <div className="page-head">
         <div>
           <h1>Applications</h1>

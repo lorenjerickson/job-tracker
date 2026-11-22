@@ -1,5 +1,6 @@
 import ApplicationDetail from "@/components/ApplicationDetail";
-import { getActiveResume, getApplication, getResume, listEvents } from "@/lib/db";
+import { duplicatesFor, getActiveResume, getApplication, getResume, listEvents } from "@/lib/db";
+import { isDuplicate } from "@/lib/duplicates";
 import { notFound } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -26,6 +27,7 @@ export default async function AppPage({
         activeVersion={active?.version ?? null}
         assessedVersion={assessed?.version ?? null}
         initialError={(await searchParams).error ?? null}
+        duplicates={duplicatesFor(app, id).filter(isDuplicate)}
       />
     </main>
   );

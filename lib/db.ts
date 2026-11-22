@@ -6,10 +6,12 @@ import type {
   AppEvent,
   Application,
   ApplicationSummary,
+  Clarification,
   ParsedResume,
   ResumeVersion,
   Status,
 } from "./types";
+import { findDuplicates, type DupCandidate, type DupExisting, type DuplicateMatch } from "./duplicates";
 import { parsedToHtml } from "./resume-format";
 import { STATUSES, SUBMITTED_STATUSES, statusLabel } from "./types";
 
@@ -105,6 +107,18 @@ const MIGRATIONS: ((db: Database.Database) => void)[] = [
   // 3: rich-text (HTML) body for resume versions created in the in-app editor.
   (db) => {
     addColumn(db, "resumes", "html", "TEXT");
+  },
+  // 4: factual clarifications written against a fit assessment (added to the base resume on request).
+  (db) => {
+    addColumn(db, "applications", "clarifications_json", "TEXT");
+  },
+  // 5: the Accepted column was removed; its cards move to Offer.
+  (db) => {
+    db.exec("UPDATE applications SET status = 'offer', updated_at = datetime('now') WHERE status = 'accepted'");
+  },
+  // 6: pairs of applications confirmed as different jobs, so duplicate warnings stop for them.
+  (db) => {
+    addColumn(db, "applications", "not_duplicates_json", "TEXT");
   },
 ];
 
@@ -240,6 +254,8 @@ type AppRow = {
   tailored_json: string | null;
   cover_letter_json: string | null;
   warnings_json: string | null;
+  clarifications_json: string | null;
+  not_duplicates_json: string | null;
   resume_id: number | null;
   assessment_resume_id: number | null;
   notes: string;
@@ -277,6 +293,8 @@ const toApp = (r: AppRow): Application => ({
   tailored: parse(r.tailored_json),
   cover_letter: parse(r.cover_letter_json),
   warnings: parse(r.warnings_json) ?? [],
+  clarifications: parse(r.clarifications_json) ?? [],
+  not_duplicates: parse(r.not_duplicates_json) ?? [],
 });
 
 export function listApplications(): ApplicationSummary[] {
@@ -285,6 +303,31 @@ export function listApplications(): ApplicationSummary[] {
       "SELECT id, company, title, location, status, position, fit_score, assessment_resume_id, applied_at, submitted_at, updated_at, created_at FROM applications ORDER BY position ASC, id ASC",
     )
     .all() as ApplicationSummary[];
+}
+
+/** Everything duplicate detection compares, for every application. */
+export function listForDuplicates(): (DupExisting & { not_duplicates: number[] })[] {
+  return (
+    db
+      .prepare("SELECT id, job_url, company, title, location, jd_text, status, fit_score, created_at, not_duplicates_json FROM applications")
+      .all() as (DupExisting & { not_duplicates_json: string | null })[]
+  ).map(({ not_duplicates_json, ...r }) => ({ ...r, not_duplicates: parse<number[]>(not_duplicates_json) ?? [] }));
+}
+
+/** Duplicate matches for a new listing, or for an existing application (excluding pairs marked "not a duplicate"). */
+export function duplicatesFor(c: DupCandidate, selfId?: number): DuplicateMatch[] {
+  const all = listForDuplicates();
+  const mine = selfId != null ? (all.find((a) => a.id === selfId)?.not_duplicates ?? []) : [];
+  const ignore = [...mine, ...all.filter((a) => selfId != null && a.not_duplicates.includes(selfId)).map((a) => a.id)];
+  return findDuplicates(c, all, { excludeId: selfId, ignore });
+}
+
+/** Record that `id` and each of `others` are different jobs. */
+export function markNotDuplicates(id: number, others: number[]) {
+  const row = db.prepare("SELECT not_duplicates_json FROM applications WHERE id = ?").get(id) as { not_duplicates_json: string | null } | undefined;
+  if (!row) throw new Error("Not found");
+  const set = new Set([...(parse<number[]>(row.not_duplicates_json) ?? []), ...others.filter((n) => Number.isInteger(n) && n !== id)]);
+  db.prepare("UPDATE applications SET not_duplicates_json = ? WHERE id = ?").run(JSON.stringify([...set]), id);
 }
 
 export function getApplication(id: number): Application | null {
@@ -353,6 +396,11 @@ export function updateApplication(id: number, fields: Record<string, unknown>) {
     }
   }
   if (("tailored" in fields || "cover_letter" in fields) && isLocked(id)) throw new LockedError();
+  // Clarifications change the base resume, not this application's documents, so they're allowed after submission.
+  if ("clarifications" in fields) {
+    sets.push("clarifications_json = @clarifications_json");
+    vals.clarifications_json = JSON.stringify(cleanClarifications(fields.clarifications));
+  }
   if ("tailored" in fields) {
     sets.push("tailored_json = @tailored_json");
     vals.tailored_json = JSON.stringify(fields.tailored);
@@ -364,6 +412,34 @@ export function updateApplication(id: number, fields: Record<string, unknown>) {
   if (!sets.length) return;
   sets.push("updated_at = datetime('now')");
   db.prepare(`UPDATE applications SET ${sets.join(", ")} WHERE id = @id`).run(vals);
+}
+
+const cut = (v: unknown, max: number) => (typeof v === "string" ? v.trim().slice(0, max) : "");
+
+/** Validate client-supplied clarifications. */
+export function cleanClarifications(v: unknown): Clarification[] {
+  if (!Array.isArray(v)) throw new Error("clarifications must be a list");
+  return v.slice(0, 100).flatMap((c): Clarification[] => {
+    if (!c || typeof c !== "object") return [];
+    const o = c as Record<string, unknown>;
+    const id = cut(o.id, 64);
+    const requirement = cut(o.requirement, 500);
+    if (!id || !requirement) return [];
+    return [
+      {
+        id,
+        requirement,
+        match: o.match === "partial" ? "partial" : "gap",
+        text: cut(o.text, 3000),
+        applied_version: Number.isInteger(o.applied_version) ? (o.applied_version as number) : null,
+        created_at: cut(o.created_at, 40) || new Date().toISOString(),
+      },
+    ];
+  });
+}
+
+export function setClarifications(id: number, list: Clarification[]) {
+  db.prepare("UPDATE applications SET clarifications_json = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(list), id);
 }
 
 export function saveGenerated(
@@ -428,7 +504,7 @@ export const moveApplication = db.transaction((id: number, status: Status, befor
       if (!current.applied_at) db.prepare("UPDATE applications SET applied_at = date('now') WHERE id = ?").run(id);
       if (!current.submitted_at) {
         db.prepare("UPDATE applications SET submitted_at = datetime('now') WHERE id = ?").run(id);
-        addEvent(id, "locked", "Submitted — tailored resume and cover letter locked");
+        addEvent(id, "locked", "Applied — tailored resume and cover letter locked");
       }
     }
   }

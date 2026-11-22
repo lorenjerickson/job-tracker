@@ -9,7 +9,7 @@ export default function NewPage() {
       <div className="page-head">
         <div>
           <h1>New application</h1>
-          <p className="muted">Paste a job link. You&apos;ll get a fit assessment, a tailored resume PDF, and a cover letter.</p>
+          <p className="muted">Paste a job link to analyze your fit. The tailored resume and cover letter unlock at a 75% fit score.</p>
         </div>
       </div>
       <NewApplication hasResume={!!getActiveResume()?.parsed} />
